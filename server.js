@@ -1,29 +1,3 @@
-const express = require("express");
-const axios = require("axios");
-const crypto = require("crypto");
-
-const app = express();
-app.use(express.json({ limit: "10mb" }));
-
-function hkdf(mediaKey, length, info) {
-  const salt = Buffer.alloc(32, 0);
-  const prk = crypto.createHmac("sha256", salt).update(mediaKey).digest();
-
-  let prev = Buffer.alloc(0);
-  let output = Buffer.alloc(0);
-  let i = 0;
-
-  while (output.length < length) {
-    i++;
-    const hmac = crypto.createHmac("sha256", prk);
-    hmac.update(Buffer.concat([prev, Buffer.from(info), Buffer.from([i])]));
-    prev = hmac.digest();
-    output = Buffer.concat([output, prev]);
-  }
-
-  return output.slice(0, length);
-}
-
 app.post("/decrypt-audio", async (req, res) => {
   try {
     const { mediaUrl, mediaKey } = req.body;
@@ -43,10 +17,24 @@ app.post("/decrypt-audio", async (req, res) => {
 
     const iv = expandedKey.slice(0, 16);
     const cipherKey = expandedKey.slice(16, 48);
+    const macKey = expandedKey.slice(48, 80);
 
     const fileData = encryptedBuffer.slice(0, encryptedBuffer.length - 10);
+    const mac = encryptedBuffer.slice(encryptedBuffer.length - 10);
+
+    const computedMac = crypto
+      .createHmac("sha256", macKey)
+      .update(Buffer.concat([iv, fileData]))
+      .digest()
+      .slice(0, 10);
+
+    if (!computedMac.equals(mac)) {
+      throw new Error("MAC inválido");
+    }
 
     const decipher = crypto.createDecipheriv("aes-256-cbc", cipherKey, iv);
+    decipher.setAutoPadding(true);
+
     const decrypted = Buffer.concat([
       decipher.update(fileData),
       decipher.final(),
@@ -54,13 +42,9 @@ app.post("/decrypt-audio", async (req, res) => {
 
     res.setHeader("Content-Type", "audio/ogg");
     res.send(decrypted);
+
   } catch (err) {
-    console.error(err);
+    console.error("Erro real:", err);
     res.status(500).json({ error: "Erro ao descriptografar áudio" });
   }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Decrypt server rodando na porta " + PORT);
 });
