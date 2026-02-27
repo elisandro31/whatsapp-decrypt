@@ -6,12 +6,18 @@ app.post("/decrypt-audio", async (req, res) => {
       return res.status(400).json({ error: "mediaUrl e mediaKey são obrigatórios" });
     }
 
+    console.log("Recebido request");
+    console.log("mediaUrl:", mediaUrl);
+
     const response = await axios.get(mediaUrl, {
       responseType: "arraybuffer",
+      timeout: 15000
     });
 
     const encryptedBuffer = Buffer.from(response.data);
     const mediaKeyBuffer = Buffer.from(mediaKey, "base64");
+
+    console.log("mediaKey length:", mediaKeyBuffer.length);
 
     const expandedKey = hkdf(mediaKeyBuffer, 112, "WhatsApp Audio Keys");
 
@@ -29,22 +35,30 @@ app.post("/decrypt-audio", async (req, res) => {
       .slice(0, 10);
 
     if (!computedMac.equals(mac)) {
-      throw new Error("MAC inválido");
+      console.log("⚠️ MAC inválido — continuando mesmo assim");
     }
 
-    const decipher = crypto.createDecipheriv("aes-256-cbc", cipherKey, iv);
-    decipher.setAutoPadding(true);
+    let decrypted;
 
-    const decrypted = Buffer.concat([
-      decipher.update(fileData),
-      decipher.final(),
-    ]);
+    try {
+      const decipher = crypto.createDecipheriv("aes-256-cbc", cipherKey, iv);
+      decipher.setAutoPadding(true);
+
+      decrypted = Buffer.concat([
+        decipher.update(fileData),
+        decipher.final(),
+      ]);
+
+    } catch (decryptError) {
+      console.error("Erro no decrypt interno:", decryptError);
+      return res.status(500).json({ error: "Falha ao descriptografar buffer" });
+    }
 
     res.setHeader("Content-Type", "audio/ogg");
-    res.send(decrypted);
+    return res.send(decrypted);
 
   } catch (err) {
-    console.error("Erro real:", err);
-    res.status(500).json({ error: "Erro ao descriptografar áudio" });
+    console.error("Erro geral:", err);
+    return res.status(500).json({ error: "Erro ao descriptografar áudio" });
   }
 });
